@@ -25,10 +25,14 @@ We also recommend using cosine annealing with the method:
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=n_epoch)
 ```
 Extra care should be taken if you use linear warm-up at the beginning. 
-The method might see slow progress and overestimate the learning rate.
+The method will see slow progress due to the initially small base learning rate, 
+so it might overestimate `d` because of this.
 To avoid issues with warm-up, use option `safeguard_warmup=True`.  
 Based on the interaction with some of the users, we recommend setting `safeguard_warmup=True`,
  `use_bias_correction=True`, and `weight_decay=0.01` when training diffusion models.
+
+See [this Google Colab](https://colab.research.google.com/drive/1TrhEfI3stJ-yNp7_ZxUAtfWjj-Qe_Hym?usp=sharing) 
+for a toy example of how one can use Prodigy to train ResNet-18 on Cifar10 (test accuracy 80% after 20 epochs).
 
 ## How to cite
 If you find our work useful, please consider citing our paper.
