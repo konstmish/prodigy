@@ -23,7 +23,8 @@ We recommend using `lr=1.` (default) for all networks. If you want to force the 
 it is better to change the value of `d_coef` (1.0 by default). Values of `d_coef` above 1, such as 2 or 10, 
 will force a larger estimate of the learning rate; set it to 0.5 or even 0.1 if you want a smaller learning rate.
 
-We also recommend using cosine annealing with the method:
+## Scheduler 
+As a rule of thumb, we recommend either using no scheduler or using cosine annealing with the method:
 ```
 # n_epoch is the total number of epochs to train the network
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=total_steps)
@@ -35,11 +36,16 @@ Extra care should be taken if you use linear warm-up at the beginning:
 The method will see slow progress due to the initially small base learning rate, 
 so it might overestimate `d`.
 To avoid issues with warm-up, use option `safeguard_warmup=True`.  
+## Diffusion models
 Based on the interaction with some of the users, we recommend setting `safeguard_warmup=True`,
- `use_bias_correction=True`, and `weight_decay=0.01` when training diffusion models.  
+ `use_bias_correction=True`, and `weight_decay=0.01` when training diffusion models. 
+Sometimes, [it is helpful](https://github.com/konstmish/prodigy/issues/8) to set `betas=(0.9, 0.99)`.
 
-See [this Google Colab](https://colab.research.google.com/drive/1TrhEfI3stJ-yNp7_ZxUAtfWjj-Qe_Hym?usp=sharing) 
-for a toy example of how one can use Prodigy to train ResNet-18 on Cifar10 (test accuracy 80% after 20 epochs).
+## Examples of using Prodigy 
+
+See [this Colab Notebook](https://colab.research.google.com/drive/1TrhEfI3stJ-yNp7_ZxUAtfWjj-Qe_Hym?usp=sharing) 
+for a toy example of how one can use Prodigy to train ResNet-18 on Cifar10 (test accuracy 80% after 20 epochs).  
+If you are interested in sharing your experience, please consider creating a Colab Notebook and sharing it in the issues. 
 
 ## How to cite
 If you find our work useful, please consider citing our paper.
