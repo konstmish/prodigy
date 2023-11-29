@@ -30,7 +30,8 @@ As a rule of thumb, we recommend either using no scheduler or using cosine annea
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=total_steps)
 ```
 We do not recommend using restarts in cosine annealing, so we suggest setting `T_max=total_steps`, where 
-`total_steps` should be the number of times `scheduler.step()` is called. 
+`total_steps` should be the number of times `scheduler.step()` is called. If you do use restarts, we highly
+recommend setting `safeguard_warmup=True`.
 
 Extra care should be taken if you use linear warm-up at the beginning: 
 The method will see slow progress due to the initially small base learning rate, 
