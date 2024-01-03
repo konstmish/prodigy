@@ -2,6 +2,7 @@
 [![Downloads](https://static.pepy.tech/badge/prodigyopt)](https://pepy.tech/project/prodigyopt) [![Downloads](https://static.pepy.tech/badge/prodigyopt/month)](https://pepy.tech/project/prodigyopt)
 
 This is the official repository used to run the experiments in the paper that proposed the Prodigy optimizer. The optimizer is implemented in PyTorch.
+There is also a JAX version of [Prodigy in Optax](https://optax.readthedocs.io/en/latest/_autosummary/optax.contrib.prodigy.html).
 
 **Prodigy: An Expeditiously Adaptive Parameter-Free Learner**  
 *K. Mishchenko, A. Defazio*  
