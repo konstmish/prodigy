@@ -81,7 +81,8 @@ class Prodigy(torch.optim.Optimizer):
                         k=0, growth_rate=growth_rate,
                         use_bias_correction=use_bias_correction,
                         decouple=decouple, safeguard_warmup=safeguard_warmup,
-                        fsdp_in_use=fsdp_in_use, te_scale=te_scale) # te_scale added to defaults
+                        fsdp_in_use=fsdp_in_use, te_scale=te_scale, # te_scale added to defaults
+                        full_dlr=None, te_dlr=None) # parameters to log and debug the learning rates
         self.d0 = d0
         super().__init__(params, defaults)
 
@@ -221,6 +222,8 @@ class Prodigy(torch.optim.Optimizer):
             group['d'] = d
             group['d_max'] = d_max
             group['d_hat'] = d_hat
+            group["full_dlr"] = dlr # log and debug for normal dlr
+            group["te_dlr"] = (dlr * te_scale) # log and debug for the new te dlr
 
             decay = group['weight_decay']
             k = group['k']
