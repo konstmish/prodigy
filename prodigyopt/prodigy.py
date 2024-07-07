@@ -58,7 +58,7 @@ class Prodigy(torch.optim.Optimizer):
                  eps=1e-8, weight_decay=0, decouple=True, 
                  use_bias_correction=False, safeguard_warmup=False,
                  d0=1e-6, d_coef=1.0, growth_rate=float('inf'),
-                 fsdp_in_use=False):
+                 fsdp_in_use=False, te_scale=1): # new parameter to scale text encoder in stable diffusion training
         if not 0.0 < d0:
             raise ValueError("Invalid d0 value: {}".format(d0))
         if not 0.0 < lr:
@@ -81,7 +81,7 @@ class Prodigy(torch.optim.Optimizer):
                         k=0, growth_rate=growth_rate,
                         use_bias_correction=use_bias_correction,
                         decouple=decouple, safeguard_warmup=safeguard_warmup,
-                        fsdp_in_use=fsdp_in_use)
+                        fsdp_in_use=fsdp_in_use, te_scale=te_scale) # te_scale added to defaults
         self.d0 = d0
         super().__init__(params, defaults)
 
@@ -113,6 +113,7 @@ class Prodigy(torch.optim.Optimizer):
         if beta3 is None:
             beta3 = math.sqrt(beta2)
         k = group['k']
+        te_scale = group["te_scale"] # acessing and storing the value of new te_scale parameter
 
         d = group['d']
         d_max = group['d_max']
@@ -225,6 +226,9 @@ class Prodigy(torch.optim.Optimizer):
             k = group['k']
             eps = group['eps']
 
+            # here is the magic trick, all TE tensors are expected to be 2D (from linear layers), unlike those in a unet
+            is_text_encoder = all(len(p.shape) == 2 for p in group["params"])
+
             for p in group['params']:
                 if p.grad is None:
                     continue
@@ -244,7 +248,13 @@ class Prodigy(torch.optim.Optimizer):
 
 
                 ### Take step
-                p.data.addcdiv_(exp_avg, denom, value=-dlr)
+                # and here we apply the new te scale to the weight update
+                if is_text_encoder:
+                    # scale down the weight update for TE due his higher sensitivity
+                    p.data.addcdiv_(exp_avg, denom, value=-(dlr * te_scale))
+                else:
+                    # standard weight update for other parameters
+                    p.data.addcdiv_(exp_avg, denom, value=-dlr)
 
             group['k'] = k + 1
 
