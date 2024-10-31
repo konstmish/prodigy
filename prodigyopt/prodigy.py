@@ -293,9 +293,10 @@ class Prodigy(torch.optim.Optimizer):
                         p.data.addcdiv_(exp_avg, denom, value=-dlr)
                     else: p.data.addcdiv_(grad, denom, value=-dlr * d)
                 else:
-                    if beta1 > 0: update=exp_avg.div(denom)
+                    if beta1 > 0:
+                        exp_avg = state['exp_avg']
+                        update=exp_avg.div(denom)
                     else: update=grad.div(denom).mul_(d)
-                    
                     clip_div=self._rms(update).clamp_(min=update_clip)
                     p.data.add_(update,alpha = -dlr / clip_div)
 
