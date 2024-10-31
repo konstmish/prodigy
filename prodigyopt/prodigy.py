@@ -109,8 +109,6 @@ class Prodigy(torch.optim.Optimizer):
     def _rms(tensor):
         return torch.linalg.norm(tensor) / (tensor.numel() ** 0.5)
 
-
-
     def step(self, closure=None):
         """Performs a single optimization step.
 
@@ -127,7 +125,6 @@ class Prodigy(torch.optim.Optimizer):
         group = self.param_groups[0]
         use_bias_correction = group['use_bias_correction']
         beta1, beta2 = group['betas']
-
         beta3 = group['beta3']
         if beta3 is None:
             beta3 = math.sqrt(beta2)
@@ -184,7 +181,6 @@ class Prodigy(torch.optim.Optimizer):
                     state['step'] = 0
                     state['s'] = torch.zeros_like(p.data).detach()
                     state['p0'] = p.detach().clone()
-
                     # Exponential moving average of gradient values
                     if beta1 > 0:
                         state['exp_avg'] = torch.zeros_like(p).detach()
@@ -307,4 +303,5 @@ class Prodigy(torch.optim.Optimizer):
             group['k'] = k + 1
 
         return loss
+        
 
