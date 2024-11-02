@@ -297,7 +297,7 @@ class Prodigy(torch.optim.Optimizer):
                         exp_avg = state['exp_avg']
                         update=exp_avg.div(denom)
                     else: update=grad.div(denom).mul_(d)
-                    clip_div=self._rms(update).clamp_(min=update_clip)
+                    clip_div=(self._rms(update) / update_clip).clamp_(min=1.0)
                     p.data.add_(update,alpha = -dlr / clip_div)
 
 
