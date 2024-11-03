@@ -255,7 +255,7 @@ class Prodigy(torch.optim.Optimizer):
 
                 state = self.state[p]
 
-                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
+                exp_avg_sq = state['exp_avg_sq']
 
                 state['step'] += 1
 
@@ -267,7 +267,6 @@ class Prodigy(torch.optim.Optimizer):
 
 
                 ### Take step
-                p.data.addcdiv_(exp_avg, denom, value=-dlr)
                 if not schedule_free:
                     exp_avg = state['exp_avg']
                     p.data.addcdiv_(exp_avg, denom, value=-dlr)
