@@ -52,6 +52,9 @@ class Prodigy(torch.optim.Optimizer):
             If you're using sharded parameters, this should be set to True. The optimizer
             will attempt to auto-detect this, but if you're using an implementation other
             than PyTorch's builtin version, the auto-detection won't work.
+        slice_p (int): Reduce memory usage by calculating LR adaptation statistics on only every 
+            pth entry of each tensor. For values > 1 this an an approximation to standard 
+            Prodigy. Values ~10 are reasonable (default 1).
     """
     def __init__(self, params, lr=1.0,
                  betas=(0.9, 0.999), beta3=None,
@@ -164,8 +167,14 @@ class Prodigy(torch.optim.Optimizer):
                 # State initialization
                 if 'step' not in state:
                     state['step'] = 0
+
                     state['s'] = torch.zeros_like(p.data.flatten()[::slice_p]).detach()
-                    state['p0'] = p.flatten()[::slice_p].detach().clone()
+
+                    if p.count_nonzero() > 0:
+                        state['p0'] = p.flatten()[::slice_p].detach().clone()
+                    else: 
+                        state['p0'] = torch.tensor(0, device=p.device, dtype=p.dtype)
+
                     # Exponential moving average of gradient values
                     state['exp_avg'] = torch.zeros_like(p.data).detach()
                     # Exponential moving average of squared gradient values
