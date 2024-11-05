@@ -261,13 +261,10 @@ class Prodigy(torch.optim.Optimizer):
 
                 denom = exp_avg_sq.sqrt().add_(d * eps)
 
-                # Apply weight decay (decoupled variant)
-                if decay != 0 and decouple and not schedule_free:
-                    p.data.add_(p.data, alpha=-decay * dlr)
-
-
                 ### Take step
                 if not schedule_free:
+                    if decay != 0 and decouple:
+                        p.data.add_(p.data, alpha=-decay * dlr)
                     exp_avg = state['exp_avg']
                     p.data.addcdiv_(exp_avg, denom, value=-dlr)
                 else:
@@ -275,8 +272,6 @@ class Prodigy(torch.optim.Optimizer):
                     update=grad.div_(denom).mul_(d)
 
                     if decay != 0 and decouple:
-                        #TODO it seems strange that the weight decay is added to the parameter updates,
-                        #which are scaled later - but it matches the original schedule-free code.
                         update.add_(p.data, alpha=decay)
 
                     z = state['z']
