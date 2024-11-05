@@ -58,7 +58,10 @@ class Prodigy(torch.optim.Optimizer):
                  eps=1e-8, weight_decay=0, decouple=True, 
                  use_bias_correction=False, safeguard_warmup=False,
                  d0=1e-6, d_coef=1.0, growth_rate=float('inf'),
-                 fsdp_in_use=False):
+                 fsdp_in_use=False,
+                 schedule_free=False,
+                 r=0.0,
+                 weight_lr_power=2.0):
         if not 0.0 < d0:
             raise ValueError("Invalid d0 value: {}".format(d0))
         if not 0.0 < lr:
@@ -81,7 +84,11 @@ class Prodigy(torch.optim.Optimizer):
                         k=0, growth_rate=growth_rate,
                         use_bias_correction=use_bias_correction,
                         decouple=decouple, safeguard_warmup=safeguard_warmup,
-                        fsdp_in_use=fsdp_in_use)
+                        fsdp_in_use=fsdp_in_use,
+                        schedule_free=schedule_free,
+                        r=r,
+                        weight_lr_power=weight_lr_power,
+                        weight_sum=0.0)
         self.d0 = d0
         super().__init__(params, defaults)
 
@@ -117,14 +124,25 @@ class Prodigy(torch.optim.Optimizer):
         d = group['d']
         d_max = group['d_max']
         d_coef = group['d_coef']
+        schedule_free = group['schedule_free']
         lr = max(group['lr'] for group in self.param_groups)
 
         if use_bias_correction:
-            bias_correction = ((1 - beta2**(k+1))**0.5) / (1 - beta1**(k+1))
+            bias_correction = (1 - beta2**(k+1))**0.5
+            if not schedule_free:
+                bias_correction /= 1 - beta1**(k+1)
         else:
             bias_correction = 1
 
         dlr = d*lr*bias_correction
+
+        if schedule_free:
+            weight_lr_power = group['weight_lr_power']
+            r = group['r']
+            weight = ((k+1)**r) * (dlr**weight_lr_power)
+            weight_sum = group['weight_sum'] = group['weight_sum'] + weight
+            if weight_sum > 0: ckp1 = weight/weight_sum
+            else: ckp1 = 0
        
         growth_rate = group['growth_rate']
         decouple = group['decouple']
@@ -167,11 +185,15 @@ class Prodigy(torch.optim.Optimizer):
                     else: state['p0'] = torch.tensor(0, device=p.device, dtype=p.dtype)
 
                     # Exponential moving average of gradient values
-                    state['exp_avg'] = torch.zeros_like(p.data).detach()
+                    if not schedule_free:
+                        state['exp_avg'] = torch.zeros_like(p).detach()
+                    elif schedule_free:
+                        state['z'] = torch.clone(p.data)
+
                     # Exponential moving average of squared gradient values
                     state['exp_avg_sq'] = torch.zeros_like(p.data).detach()
 
-                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
+                exp_avg_sq = state['exp_avg_sq']
                
                 s = state['s']
                 p0 = state['p0']
@@ -181,7 +203,10 @@ class Prodigy(torch.optim.Optimizer):
                     d_numerator += (d / d0) * dlr * torch.dot(grad.flatten(), (p0.data - p.data).flatten()).item()
 
                     # Adam EMA updates
-                    exp_avg.mul_(beta1).add_(grad, alpha=d * (1-beta1))
+                    if not schedule_free:
+                        exp_avg = state['exp_avg']
+                        exp_avg.mul_(beta1).add_(grad, alpha=d * (1-beta1))
+                    
                     exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=d * d * (1-beta2))
 
                     if safeguard_warmup:
@@ -189,8 +214,6 @@ class Prodigy(torch.optim.Optimizer):
                     else:
                         s.mul_(beta3).add_(grad, alpha=((d / d0) * dlr))
                     d_denom += s.abs().sum().item()
-
-            ######
 
         d_hat = d
 
@@ -235,21 +258,32 @@ class Prodigy(torch.optim.Optimizer):
 
                 state = self.state[p]
 
-                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
+                exp_avg_sq = state['exp_avg_sq']
 
                 state['step'] += 1
 
                 denom = exp_avg_sq.sqrt().add_(d * eps)
 
-                # Apply weight decay (decoupled variant)
-                if decay != 0 and decouple:
-                    p.data.add_(p.data, alpha=-decay * dlr)
-
-
                 ### Take step
-                p.data.addcdiv_(exp_avg, denom, value=-dlr)
+                if not schedule_free:
+                    if decay != 0 and decouple:
+                        p.data.add_(p.data, alpha=-decay * dlr)
+                    exp_avg = state['exp_avg']
+                    p.data.addcdiv_(exp_avg, denom, value=-dlr)
+                else:
+                    # Reuse grad buffer for memory efficiency
+                    update=grad.div_(denom).mul_(d)
+
+                    if decay != 0 and decouple:
+                        update.add_(p.data, alpha=decay)
+
+                    z = state['z']
+                    p.data.lerp_(end=z, weight=ckp1)
+
+                    p.data.add_(update, alpha = dlr*(beta1*(1-ckp1)-1))
+                    z.sub_(update, alpha = dlr)
 
             group['k'] = k + 1
 
         return loss
-        
+
