@@ -52,13 +52,17 @@ class Prodigy(torch.optim.Optimizer):
             If you're using sharded parameters, this should be set to True. The optimizer
             will attempt to auto-detect this, but if you're using an implementation other
             than PyTorch's builtin version, the auto-detection won't work.
+        slice_p (int): Reduce memory usage by calculating LR adaptation statistics on only every 
+            pth entry of each tensor. For values greater than 1 this an an approximation to standard 
+            Prodigy. Values ~11 are reasonable (default 1).
     """
     def __init__(self, params, lr=1.0,
                  betas=(0.9, 0.999), beta3=None,
                  eps=1e-8, weight_decay=0, decouple=True, 
                  use_bias_correction=False, safeguard_warmup=False,
                  d0=1e-6, d_coef=1.0, growth_rate=float('inf'),
-                 fsdp_in_use=False):
+                 fsdp_in_use=False,
+                 slice_p=1):
         if not 0.0 < d0:
             raise ValueError("Invalid d0 value: {}".format(d0))
         if not 0.0 < lr:
@@ -81,7 +85,8 @@ class Prodigy(torch.optim.Optimizer):
                         k=0, growth_rate=growth_rate,
                         use_bias_correction=use_bias_correction,
                         decouple=decouple, safeguard_warmup=safeguard_warmup,
-                        fsdp_in_use=fsdp_in_use)
+                        fsdp_in_use=fsdp_in_use,
+                        slice_p=slice_p)
         self.d0 = d0
         super().__init__(params, defaults)
 
@@ -140,6 +145,7 @@ class Prodigy(torch.optim.Optimizer):
             group_lr = group['lr']
             d0 = group['d0']
             safeguard_warmup = group['safeguard_warmup']
+            slice_p = group['slice_p']
 
             if group_lr not in [lr, 0.0]:
                 raise RuntimeError(f"Setting different lr values in different parameter groups is only supported for values of 0")
@@ -161,10 +167,13 @@ class Prodigy(torch.optim.Optimizer):
                 # State initialization
                 if 'step' not in state:
                     state['step'] = 0
-                    state['s'] = torch.zeros_like(p.data).detach()
+
+                    state['s'] = torch.zeros_like(p.data.flatten()[::slice_p]).detach()
+
                     if p.count_nonzero() > 0:
-                        state['p0'] = p.detach().clone()
-                    else: state['p0'] = torch.tensor(0, device=p.device, dtype=p.dtype)
+                        state['p0'] = p.flatten()[::slice_p].detach().clone()
+                    else: 
+                        state['p0'] = torch.tensor(0, device=p.device, dtype=p.dtype)
 
                     # Exponential moving average of gradient values
                     state['exp_avg'] = torch.zeros_like(p.data).detach()
@@ -178,16 +187,17 @@ class Prodigy(torch.optim.Optimizer):
 
                 if group_lr > 0.0:
                     # we use d / d0 instead of just d to avoid getting values that are too small
-                    d_numerator += (d / d0) * dlr * torch.dot(grad.flatten(), (p0.data - p.data).flatten()).item()
+                    sliced_grad = grad.flatten()[::slice_p]
+                    d_numerator += (d / d0) * dlr * torch.dot(sliced_grad, p0.data - p.data.flatten()[::slice_p]).item()
 
                     # Adam EMA updates
                     exp_avg.mul_(beta1).add_(grad, alpha=d * (1-beta1))
                     exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=d * d * (1-beta2))
 
                     if safeguard_warmup:
-                        s.mul_(beta3).add_(grad, alpha=((d / d0) * d))
+                        s.mul_(beta3).add_(sliced_grad, alpha=((d / d0) * d))
                     else:
-                        s.mul_(beta3).add_(grad, alpha=((d / d0) * dlr))
+                        s.mul_(beta3).add_(sliced_grad, alpha=((d / d0) * dlr))
                     d_denom += s.abs().sum().item()
 
             ######
