@@ -162,7 +162,10 @@ class Prodigy(torch.optim.Optimizer):
                 if 'step' not in state:
                     state['step'] = 0
                     state['s'] = torch.zeros_like(p.data).detach()
-                    state['p0'] = p.detach().clone()
+                    if p.count_nonzero() > 0:
+                        state['p0'] = p.detach().clone()
+                    else: state['p0'] = torch.tensor(0, device=p.device, dtype=p.dtype)
+
                     # Exponential moving average of gradient values
                     state['exp_avg'] = torch.zeros_like(p.data).detach()
                     # Exponential moving average of squared gradient values
