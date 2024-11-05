@@ -18,6 +18,11 @@ class Prodigy(torch.optim.Optimizer):
     Implements Adam with Prodigy step-sizes.
     Leave LR set to 1 unless you encounter instability.
    
+    To scale the learning rate differently for each layer, set the 'layer_scale'
+    for each parameter group. Increase (or decrease) from its default value of 1.0
+    to increase (or decrease) the learning rate for that layer relative to the 
+    other layers.
+    
     Arguments:
         params (iterable):
             Iterable of parameters to optimize or dicts defining parameter groups.
@@ -78,7 +83,7 @@ class Prodigy(torch.optim.Optimizer):
                         eps=eps, weight_decay=weight_decay,
                         d=d0, d0=d0, d_max=d0,
                         d_numerator=0.0, d_coef=d_coef,
-                        k=0, growth_rate=growth_rate,
+                        k=0, layer_scale=1.0, growth_rate=growth_rate,
                         use_bias_correction=use_bias_correction,
                         decouple=decouple, safeguard_warmup=safeguard_warmup,
                         fsdp_in_use=fsdp_in_use)
@@ -138,12 +143,15 @@ class Prodigy(torch.optim.Optimizer):
             k = group['k']
             eps = group['eps']
             group_lr = group['lr']
+            r = group['layer_scale']
             d0 = group['d0']
             safeguard_warmup = group['safeguard_warmup']
 
             if group_lr not in [lr, 0.0]:
-                raise RuntimeError(f"Setting different lr values in different parameter groups is only supported for values of 0")
-
+                raise RuntimeError(f"Setting different lr values in different parameter groups "
+                                   "is only supported for values of 0. To scale the learning "
+                                   "rate differently for each layer, set the 'layer_scale' value instead.")
+            
             for p in group['params']:
                 if p.grad is None:
                     continue
@@ -178,17 +186,17 @@ class Prodigy(torch.optim.Optimizer):
 
                 if group_lr > 0.0:
                     # we use d / d0 instead of just d to avoid getting values that are too small
-                    d_numerator += (d / d0) * dlr * torch.dot(grad.flatten(), (p0.data - p.data).flatten()).item()
+                    d_numerator += (d / d0) * r * dlr * torch.dot(grad.flatten(), (p0.data - p.data).flatten()).item()
 
                     # Adam EMA updates
-                    exp_avg.mul_(beta1).add_(grad, alpha=d * (1-beta1))
+                    exp_avg.mul_(beta1).add_(grad, alpha=r * d * (1-beta1))
                     exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=d * d * (1-beta2))
 
                     if safeguard_warmup:
                         s.mul_(beta3).add_(grad, alpha=((d / d0) * d))
                     else:
                         s.mul_(beta3).add_(grad, alpha=((d / d0) * dlr))
-                    d_denom += s.abs().sum().item()
+                    d_denom += r * s.abs().sum().item()
 
             ######
 
