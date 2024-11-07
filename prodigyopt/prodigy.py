@@ -89,6 +89,7 @@ class Prodigy(torch.optim.Optimizer):
                         slice_p=slice_p)
         self.d0 = d0
         super().__init__(params, defaults)
+        self.init_step()
 
     @property
     def supports_memory_efficient_fp16(self):
@@ -97,6 +98,112 @@ class Prodigy(torch.optim.Optimizer):
     @property
     def supports_flat_params(self):
         return True
+
+
+    def init_step(self):
+        self.d_denom = 0.0
+
+        #write values that are taken from the first param group but used for all param groups in
+        #step_parameter() to self, in order to match the original code behaviour
+        #TODO this can probably be simplified; depending on the variable, the values can be assumed
+        #identical for all groups, and taken directly from group[] by step_parameter()
+
+        group = self.param_groups[0]
+        use_bias_correction = group['use_bias_correction']
+        self.beta1, self.beta2 = group['betas']
+        self.beta3 = group['beta3']
+        if self.beta3 is None:
+            self.beta3 = math.sqrt(self.beta2)
+        k = group['k']
+
+        self.d = group['d']
+        lr = max(group['lr'] for group in self.param_groups)
+
+        if use_bias_correction:
+            bias_correction = ((1 - self.beta2**(k+1))**0.5) / (1 - self.beta1**(k+1))
+        else:
+            bias_correction = 1
+
+        self.dlr = self.d*lr*bias_correction
+       
+        self.decouple = group['decouple']
+        self.fsdp_in_use = group['fsdp_in_use']
+
+        self.d_numerator = group['d_numerator']
+        self.d_numerator *= self.beta3
+
+        for group in self.param_groups:
+            group_lr = group['lr']
+            if group_lr not in [lr, 0.0]:
+                raise RuntimeError(f"Setting different lr values in different parameter groups is only supported for values of 0")
+
+        
+    def step_parameter(self, p, group, i):
+        if p.grad is None:
+            return
+        decay = group['weight_decay']
+        k = group['k']
+        eps = group['eps']
+        group_lr = group['lr']
+        d0 = group['d0']
+        safeguard_warmup = group['safeguard_warmup']
+        slice_p = group['slice_p']
+        if hasattr(p, "_fsdp_flattened"):
+            self.fsdp_in_use = True
+
+        grad = p.grad.data
+
+        # Apply weight decay (coupled variant)
+        if decay != 0 and not self.decouple:
+            grad.add_(p.data, alpha=decay)
+
+        state = self.state[p]
+
+        # State initialization
+        if 'step' not in state:
+            state['step'] = 0
+            state['s'] = torch.zeros_like(p.data.flatten()[::slice_p]).detach()
+            if p.count_nonzero() > 0:
+                state['p0'] = p.flatten()[::slice_p].detach().clone()
+            else:
+                state['p0'] = torch.tensor(0, device=p.device, dtype=p.dtype)
+
+            # Exponential moving average of gradient values
+            state['exp_avg'] = torch.zeros_like(p.data).detach()
+            # Exponential moving average of squared gradient values
+            state['exp_avg_sq'] = torch.zeros_like(p.data).detach()
+
+        exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
+       
+        s = state['s']
+        p0 = state['p0']
+
+        if group_lr > 0.0:
+            # we use d / d0 instead of just d to avoid getting values that are too small
+            sliced_grad = grad.flatten()[::slice_p]
+            self.d_numerator += (self.d / d0) * self.dlr * torch.dot(sliced_grad, p0.data - p.data.flatten()[::slice_p]).item()
+
+            # Adam EMA updates
+            exp_avg.mul_(self.beta1).add_(grad, alpha=self.d * (1-self.beta1))
+            exp_avg_sq.mul_(self.beta2).addcmul_(grad, grad, value=self.d * self.d * (1-self.beta2))
+
+            if safeguard_warmup:
+                s.mul_(self.beta3).add_(sliced_grad, alpha=((self.d / d0) * self.d))
+            else:
+                s.mul_(self.beta3).add_(sliced_grad, alpha=((self.d / d0) * self.dlr))
+            self.d_denom += s.abs().sum().item()
+
+
+        state['step'] += 1
+
+        denom = exp_avg_sq.sqrt().add_(self.d * eps)
+
+        # Apply weight decay (decoupled variant)
+        if decay != 0 and self.decouple:
+            p.data.add_(p.data, alpha=-decay * self.dlr)
+
+        ### Take step
+        p.data.addcdiv_(exp_avg, denom, value=-self.dlr)
 
     def step(self, closure=None):
         """Performs a single optimization step.
@@ -108,158 +215,48 @@ class Prodigy(torch.optim.Optimizer):
         loss = None
         if closure is not None:
             loss = closure()
-
-        d_denom = 0.0
-
+        for group in self.param_groups:
+            for i, p in enumerate(group["params"]):
+                self.step_parameter(p, group, i)
+        self.calculate_d()
+        self.init_step() #first init_step is called in __init__
+        return loss
+        
+    def calculate_d(self):
         group = self.param_groups[0]
-        use_bias_correction = group['use_bias_correction']
-        beta1, beta2 = group['betas']
-        beta3 = group['beta3']
-        if beta3 is None:
-            beta3 = math.sqrt(beta2)
-        k = group['k']
-
-        d = group['d']
         d_max = group['d_max']
         d_coef = group['d_coef']
+        growth_rate = group['growth_rate']
         lr = max(group['lr'] for group in self.param_groups)
 
-        if use_bias_correction:
-            bias_correction = ((1 - beta2**(k+1))**0.5) / (1 - beta1**(k+1))
-        else:
-            bias_correction = 1
-
-        dlr = d*lr*bias_correction
-       
-        growth_rate = group['growth_rate']
-        decouple = group['decouple']
-        fsdp_in_use = group['fsdp_in_use']
-
-        d_numerator = group['d_numerator']
-        d_numerator *= beta3
-
-        for group in self.param_groups:
-            decay = group['weight_decay']
-            k = group['k']
-            eps = group['eps']
-            group_lr = group['lr']
-            d0 = group['d0']
-            safeguard_warmup = group['safeguard_warmup']
-            slice_p = group['slice_p']
-
-            if group_lr not in [lr, 0.0]:
-                raise RuntimeError(f"Setting different lr values in different parameter groups is only supported for values of 0")
-
-            for p in group['params']:
-                if p.grad is None:
-                    continue
-                if hasattr(p, "_fsdp_flattened"):
-                    fsdp_in_use = True
-               
-                grad = p.grad.data
-               
-                # Apply weight decay (coupled variant)
-                if decay != 0 and not decouple:
-                    grad.add_(p.data, alpha=decay)
-
-                state = self.state[p]
-
-                # State initialization
-                if 'step' not in state:
-                    state['step'] = 0
-
-                    state['s'] = torch.zeros_like(p.data.flatten()[::slice_p]).detach()
-
-                    if p.count_nonzero() > 0:
-                        state['p0'] = p.flatten()[::slice_p].detach().clone()
-                    else: 
-                        state['p0'] = torch.tensor(0, device=p.device, dtype=p.dtype)
-
-                    # Exponential moving average of gradient values
-                    state['exp_avg'] = torch.zeros_like(p.data).detach()
-                    # Exponential moving average of squared gradient values
-                    state['exp_avg_sq'] = torch.zeros_like(p.data).detach()
-
-                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
-               
-                s = state['s']
-                p0 = state['p0']
-
-                if group_lr > 0.0:
-                    # we use d / d0 instead of just d to avoid getting values that are too small
-                    sliced_grad = grad.flatten()[::slice_p]
-                    d_numerator += (d / d0) * dlr * torch.dot(sliced_grad, p0.data - p.data.flatten()[::slice_p]).item()
-
-                    # Adam EMA updates
-                    exp_avg.mul_(beta1).add_(grad, alpha=d * (1-beta1))
-                    exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=d * d * (1-beta2))
-
-                    if safeguard_warmup:
-                        s.mul_(beta3).add_(sliced_grad, alpha=((d / d0) * d))
-                    else:
-                        s.mul_(beta3).add_(sliced_grad, alpha=((d / d0) * dlr))
-                    d_denom += s.abs().sum().item()
-
-            ######
-
-        d_hat = d
+        d_hat = self.d #FIXME no effect, is overwritten; but matches original code
 
         # if we have not done any progres, return
         # if we have any gradients available, will have d_denom > 0 (unless \|g\|=0)
-        if d_denom == 0:
-            return loss
-       
-        if lr > 0.0:
-            if fsdp_in_use:
-                dist_tensor = torch.zeros(2).cuda()
-                dist_tensor[0] = d_numerator
-                dist_tensor[1] = d_denom
-                dist.all_reduce(dist_tensor, op=dist.ReduceOp.SUM)
-                global_d_numerator = dist_tensor[0]
-                global_d_denom = dist_tensor[1]
-            else:
-                global_d_numerator = d_numerator
-                global_d_denom = d_denom
+        if self.d_denom != 0:
+            if lr > 0.0: #FIXME lr is max of group lr - must always be > 0; but matches original code
+                if self.fsdp_in_use:
+                    dist_tensor = torch.zeros(2).cuda()
+                    dist_tensor[0] = self.d_numerator
+                    dist_tensor[1] = self.d_denom
+                    dist.all_reduce(dist_tensor, op=dist.ReduceOp.SUM)
+                    global_d_numerator = dist_tensor[0]
+                    global_d_denom = dist_tensor[1]
+                else:
+                    global_d_numerator = self.d_numerator
+                    global_d_denom = self.d_denom
 
-            d_hat = d_coef * global_d_numerator / global_d_denom
-            if d == group['d0']:
-                d = max(d, d_hat)
-            d_max = max(d_max, d_hat)
-            d = min(d_max, d * growth_rate)
+                d_hat = d_coef * global_d_numerator / global_d_denom
+                if self.d == group['d0']:
+                    self.d = max(self.d, d_hat)
+                d_max = max(d_max, d_hat)
+                self.d = min(d_max, self.d * growth_rate)
 
-        for group in self.param_groups:
-            group['d_numerator'] = global_d_numerator
-            group['d_denom'] = global_d_denom
-            group['d'] = d
-            group['d_max'] = d_max
-            group['d_hat'] = d_hat
+            for group in self.param_groups:
+                group['d_numerator'] = global_d_numerator #FIXME would fail unassigned if lr was <= 0; but matches original code
+                group['d_denom'] = global_d_denom
+                group['d'] = self.d
+                group['d_max'] = d_max
+                group['d_hat'] = d_hat
+                group['k'] = group['k'] + 1
 
-            decay = group['weight_decay']
-            k = group['k']
-            eps = group['eps']
-
-            for p in group['params']:
-                if p.grad is None:
-                    continue
-                grad = p.grad.data
-
-                state = self.state[p]
-
-                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
-
-                state['step'] += 1
-
-                denom = exp_avg_sq.sqrt().add_(d * eps)
-
-                # Apply weight decay (decoupled variant)
-                if decay != 0 and decouple:
-                    p.data.add_(p.data, alpha=-decay * dlr)
-
-
-                ### Take step
-                p.data.addcdiv_(exp_avg, denom, value=-dlr)
-
-            group['k'] = k + 1
-
-        return loss
-        
