@@ -26,7 +26,7 @@ class Prodigy(torch.optim.Optimizer):
         betas (Tuple[float, float], optional): coefficients used for computing
             running averages of gradient and its square (default: (0.9, 0.999))
         beta3 (float):
-            coefficients for computing the Prodidy stepsize using running averages.
+            coefficients for computing the Prodigy stepsize using running averages.
             If set to None, uses the value of square root of beta2 (default: None).
         eps (float):
             Term added to the denominator outside of the root operation to improve numerical stability. (default: 1e-8).
@@ -77,7 +77,7 @@ class Prodigy(torch.optim.Optimizer):
         if decouple and weight_decay > 0:
             print(f"Using decoupled weight decay")
 
-       
+
         defaults = dict(lr=lr, betas=betas, beta3=beta3,
                         eps=eps, weight_decay=weight_decay,
                         d=d0, d0=d0, d_max=d0,
@@ -97,7 +97,7 @@ class Prodigy(torch.optim.Optimizer):
     @property
     def supports_flat_params(self):
         return True
-
+    
     def step(self, closure=None):
         """Performs a single optimization step.
 
@@ -109,36 +109,40 @@ class Prodigy(torch.optim.Optimizer):
         if closure is not None:
             loss = closure()
 
-        d_denom = 0.0
-
-        group = self.param_groups[0]
-        use_bias_correction = group['use_bias_correction']
-        beta1, beta2 = group['betas']
-        beta3 = group['beta3']
-        if beta3 is None:
-            beta3 = math.sqrt(beta2)
-        k = group['k']
-
-        d = group['d']
-        d_max = group['d_max']
-        d_coef = group['d_coef']
-        lr = max(group['lr'] for group in self.param_groups)
-
-        if use_bias_correction:
-            bias_correction = ((1 - beta2**(k+1))**0.5) / (1 - beta1**(k+1))
-        else:
-            bias_correction = 1
-
-        dlr = d*lr*bias_correction
-       
-        growth_rate = group['growth_rate']
-        decouple = group['decouple']
-        fsdp_in_use = group['fsdp_in_use']
-
-        d_numerator = group['d_numerator']
-        d_numerator *= beta3
-
+        """""
+        Iterate individually over all parameter groups, following the AdamW approach
+        to support multiple parameter groups with distinct settings.
+        """
         for group in self.param_groups:
+
+            d_denom = 0.0
+
+            use_bias_correction = group['use_bias_correction']
+            beta1, beta2 = group['betas']
+            beta3 = group['beta3']
+            if beta3 is None:
+                beta3 = math.sqrt(beta2)
+            k = group['k']
+
+            d = group['d']
+            d_max = group['d_max']
+            d_coef = group['d_coef']
+            lr = group['lr']
+
+            if use_bias_correction:
+                bias_correction = ((1 - beta2**(k+1))**0.5) / (1 - beta1**(k+1))
+            else:
+                bias_correction = 1
+
+            dlr = d * lr * bias_correction
+
+            growth_rate = group['growth_rate']
+            decouple = group['decouple']
+            fsdp_in_use = group['fsdp_in_use']
+
+            d_numerator = group['d_numerator']
+            d_numerator *= beta3
+
             decay = group['weight_decay']
             k = group['k']
             eps = group['eps']
@@ -147,17 +151,14 @@ class Prodigy(torch.optim.Optimizer):
             safeguard_warmup = group['safeguard_warmup']
             slice_p = group['slice_p']
 
-            if group_lr not in [lr, 0.0]:
-                raise RuntimeError(f"Setting different lr values in different parameter groups is only supported for values of 0")
-
             for p in group['params']:
                 if p.grad is None:
                     continue
                 if hasattr(p, "_fsdp_flattened"):
                     fsdp_in_use = True
-               
+
                 grad = p.grad.data
-               
+
                 # Apply weight decay (coupled variant)
                 if decay != 0 and not decouple:
                     grad.add_(p.data, alpha=decay)
@@ -181,7 +182,7 @@ class Prodigy(torch.optim.Optimizer):
                     state['exp_avg_sq'] = torch.zeros_like(p.data).detach()
 
                 exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
-               
+
                 s = state['s']
                 p0 = state['p0']
 
@@ -191,8 +192,8 @@ class Prodigy(torch.optim.Optimizer):
                     d_numerator += (d / d0) * dlr * torch.dot(sliced_grad, p0.data - p.data.flatten()[::slice_p]).item()
 
                     # Adam EMA updates
-                    exp_avg.mul_(beta1).add_(grad, alpha=d * (1-beta1))
-                    exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=d * d * (1-beta2))
+                    exp_avg.mul_(beta1).add_(grad, alpha=d * (1 - beta1))
+                    exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=d * d * (1 - beta2))
 
                     if safeguard_warmup:
                         s.mul_(beta3).add_(sliced_grad, alpha=((d / d0) * d))
@@ -200,43 +201,41 @@ class Prodigy(torch.optim.Optimizer):
                         s.mul_(beta3).add_(sliced_grad, alpha=((d / d0) * dlr))
                     d_denom += s.abs().sum().item()
 
-            ######
+            d_hat = d
+            
+            # if we have not done any progres, return
+            # if we have any gradients available, will have d_denom > 0 (unless \|g\|=0)
+            if d_denom == 0:
+                continue  # skip this group instead of return loss
 
-        d_hat = d
+            if lr > 0.0:
+                if fsdp_in_use:
+                    dist_tensor = torch.zeros(2).to(next(group['params']).device) # adapting to the new approach
+                    dist_tensor[0] = d_numerator
+                    dist_tensor[1] = d_denom
+                    dist.all_reduce(dist_tensor, op=dist.ReduceOp.SUM)
+                    group_d_numerator = dist_tensor[0]
+                    group_d_denom = dist_tensor[1]
+                else:
+                    group_d_numerator = d_numerator
+                    group_d_denom = d_denom
 
-        # if we have not done any progres, return
-        # if we have any gradients available, will have d_denom > 0 (unless \|g\|=0)
-        if d_denom == 0:
-            return loss
-       
-        if lr > 0.0:
-            if fsdp_in_use:
-                dist_tensor = torch.zeros(2).cuda()
-                dist_tensor[0] = d_numerator
-                dist_tensor[1] = d_denom
-                dist.all_reduce(dist_tensor, op=dist.ReduceOp.SUM)
-                global_d_numerator = dist_tensor[0]
-                global_d_denom = dist_tensor[1]
-            else:
-                global_d_numerator = d_numerator
-                global_d_denom = d_denom
+                d_hat = d_coef * group_d_numerator / group_d_denom
+                if d == group['d0']:
+                    d = max(d, d_hat)
+                d_max = max(d_max, d_hat)
+                d = min(d_max, d * growth_rate)
 
-            d_hat = d_coef * global_d_numerator / global_d_denom
-            if d == group['d0']:
-                d = max(d, d_hat)
-            d_max = max(d_max, d_hat)
-            d = min(d_max, d * growth_rate)
+            """
+            Unified the second pass of 'for group in self.param_groups' with the first
+            to ensure more consistent data for each group.
+            """
 
-        for group in self.param_groups:
-            group['d_numerator'] = global_d_numerator
-            group['d_denom'] = global_d_denom
+            group['d_numerator'] = group_d_numerator
+            group['d_denom'] = group_d_denom
             group['d'] = d
             group['d_max'] = d_max
             group['d_hat'] = d_hat
-
-            decay = group['weight_decay']
-            k = group['k']
-            eps = group['eps']
 
             for p in group['params']:
                 if p.grad is None:
@@ -255,11 +254,9 @@ class Prodigy(torch.optim.Optimizer):
                 if decay != 0 and decouple:
                     p.data.add_(p.data, alpha=-decay * dlr)
 
-
                 ### Take step
                 p.data.addcdiv_(exp_avg, denom, value=-dlr)
 
             group['k'] = k + 1
 
         return loss
-        
