@@ -215,9 +215,13 @@ class Prodigy(torch.optim.Optimizer):
         loss = None
         if closure is not None:
             loss = closure()
+
+        #if step_parameter() was called for all parameter during a fused backpass,
+        #all gradients are None and this loop won't do anything:
         for group in self.param_groups:
             for i, p in enumerate(group["params"]):
                 self.step_parameter(p, group, i)
+
         self.calculate_d()
         self.init_step() #first init_step is called in __init__
         return loss
