@@ -2,7 +2,7 @@
 [![Downloads](https://static.pepy.tech/badge/prodigyopt)](https://pepy.tech/project/prodigyopt) [![Downloads](https://static.pepy.tech/badge/prodigyopt/month)](https://pepy.tech/project/prodigyopt)
 
 This is the official repository used to run the experiments in the paper that proposed the Prodigy optimizer. The optimizer is implemented in PyTorch.
-There is also a JAX version of [Prodigy in Optax](https://optax.readthedocs.io/en/latest/api/contrib.html#prodigy).
+There is also a JAX version of [Prodigy in Optax](https://optax.readthedocs.io/en/latest/api/contrib.html#prodigy), which currently does not have the `slice_p` argument.
 
 **Prodigy: An Expeditiously Adaptive Parameter-Free Learner**  
 *K. Mishchenko, A. Defazio*  
@@ -15,14 +15,19 @@ To install the package, simply run
 Let `net` be the neural network you want to train. Then, you can use the method as follows:
 ```
 from prodigyopt import Prodigy
-# you can choose weight decay value based on your problem, 0 by default
-opt = Prodigy(net.parameters(), lr=1., weight_decay=weight_decay)
+# choose weight decay value based on your problem, 0 by default
+# set slice_p to 11 if you have limited memory, 1 by default
+opt = Prodigy(net.parameters(), lr=1., weight_decay=weight_decay, slice_p=slice_p)
 ```
 Note that by default, Prodigy uses weight decay as in AdamW. 
 If you want it to use standard $\ell_2$ regularization (as in Adam), use option `decouple=False`. 
 We recommend using `lr=1.` (default) for all networks. If you want to force the method to estimate a smaller or larger learning rate, 
 it is better to change the value of `d_coef` (1.0 by default). Values of `d_coef` above 1, such as 2 or 10, 
-will force a larger estimate of the learning rate; set it to 0.5 or even 0.1 if you want a smaller learning rate.
+will force a larger estimate of the learning rate; set it to 0.5 or even 0.1 if you want a smaller learning rate.  
+Standard values of `weight_decay` to try are 0 (default in Prodigy), 0.001, 0.01 (default in AdamW), and 0.1.  
+Use values of `slice_p` larger than 1 to reduce the memory consumption. `slice_p=11` should give a good trade-off
+ between accuracy of estimate learning rate and memory efficiency.
+
 
 ## Scheduler 
 As a rule of thumb, we recommend either using no scheduler or using cosine annealing with the method:
@@ -52,11 +57,11 @@ If you are interested in sharing your experience, please consider creating a Col
 ## How to cite
 If you find our work useful, please consider citing our paper.
 ```
-@article{mishchenko2023prodigy,
+@inproceedings{mishchenko2024prodigy,
     title={Prodigy: An Expeditiously Adaptive Parameter-Free Learner},
     author={Mishchenko, Konstantin and Defazio, Aaron},
-    journal={arXiv preprint arXiv:2306.06101},
-    year={2023},
-    url={https://arxiv.org/pdf/2306.06101.pdf}
+    booktitle={Forty-first International Conference on Machine Learning},
+    year={2024},
+    url={https://openreview.net/forum?id=JJpOssn0uP}
 }
 ```
