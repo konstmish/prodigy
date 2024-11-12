@@ -46,7 +46,9 @@ To avoid issues with warm-up, use option `safeguard_warmup=True`.
 ## Diffusion models
 Based on the interaction with some of the users, we recommend setting `safeguard_warmup=True`,
  `use_bias_correction=True`, and `weight_decay=0.01` when training diffusion models. 
-Sometimes, [it is helpful](https://github.com/konstmish/prodigy/issues/8) to set `betas=(0.9, 0.99)`.
+Sometimes, [it is helpful](https://github.com/konstmish/prodigy/issues/8) to set `betas=(0.9, 0.99)`.  
+If the model is not training, try to keep track of `d` and if it remains too small, [it might be worth increasing `d0`](https://github.com/konstmish/prodigy/issues/27) to 1e-5 or even 1e-4. 
+That being said, the optimizer was mostly insensitive to `d0` in our other experiments.
 
 ## Examples of using Prodigy 
 
