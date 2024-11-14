@@ -170,9 +170,10 @@ class Prodigy(torch.optim.Optimizer):
 
                     state['s'] = torch.zeros_like(p.data.flatten()[::slice_p]).detach()
 
-                    if p.count_nonzero() > 0:
+                    if p.any():
                         state['p0'] = p.flatten()[::slice_p].detach().clone()
-                    else: 
+                    else:
+                        # All values are zero, so save VRAM with a zero-tensor
                         state['p0'] = torch.tensor(0, device=p.device, dtype=p.dtype)
 
                     # Exponential moving average of gradient values
