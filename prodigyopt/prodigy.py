@@ -53,7 +53,7 @@ class Prodigy(torch.optim.Optimizer):
             will attempt to auto-detect this, but if you're using an implementation other
             than PyTorch's builtin version, the auto-detection won't work.
         slice_p (int): Reduce memory usage by calculating LR adaptation statistics on only every 
-            pth entry of each tensor. For values greater than 1 this an an approximation to standard 
+            pth entry of each tensor. For values greater than 1 this is an approximation to standard 
             Prodigy. Values ~11 are reasonable (default 1).
     """
     def __init__(self, params, lr=1.0,
