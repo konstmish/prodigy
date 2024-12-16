@@ -176,12 +176,13 @@ class Prodigy(torch.optim.Optimizer):
                         state['p0'] = torch.tensor(0, device=p.device, dtype=p.dtype)
 
                     # Exponential moving average of gradient values
-                    state['exp_avg'] = torch.zeros_like(p.data).detach()
+                    if beta1 > 0:
+                        state['exp_avg'] = torch.zeros_like(p.data).detach()
                     # Exponential moving average of squared gradient values
                     state['exp_avg_sq'] = torch.zeros_like(p.data).detach()
 
-                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
-               
+                exp_avg_sq = state['exp_avg_sq']
+
                 s = state['s']
                 p0 = state['p0']
 
@@ -191,7 +192,9 @@ class Prodigy(torch.optim.Optimizer):
                     d_numerator += (d / d0) * dlr * torch.dot(sliced_grad, p0.data - p.data.flatten()[::slice_p]).item()
 
                     # Adam EMA updates
-                    exp_avg.mul_(beta1).add_(grad, alpha=d * (1-beta1))
+                    if beta1 > 0:
+                        exp_avg = state['exp_avg']
+                        exp_avg.mul_(beta1).add_(grad, alpha=d * (1-beta1))
                     exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=d * d * (1-beta2))
 
                     if safeguard_warmup:
@@ -245,7 +248,7 @@ class Prodigy(torch.optim.Optimizer):
 
                 state = self.state[p]
 
-                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
+                exp_avg_sq = state['exp_avg_sq']
 
                 state['step'] += 1
 
@@ -255,9 +258,13 @@ class Prodigy(torch.optim.Optimizer):
                 if decay != 0 and decouple:
                     p.data.add_(p.data, alpha=-decay * dlr)
 
-
                 ### Take step
-                p.data.addcdiv_(exp_avg, denom, value=-dlr)
+                if beta1 > 0:
+                    exp_avg = state['exp_avg']
+                    p.data.addcdiv_(exp_avg,denom, value=-dlr)
+                else:
+                    p.data.addcdiv_(grad,denom, value=-dlr * d)
+
 
             group['k'] = k + 1
 
