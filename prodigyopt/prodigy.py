@@ -225,9 +225,9 @@ class Prodigy(torch.optim.Optimizer):
                         exp_avg_sq_row = state["exp_avg_sq_row"]
                         exp_avg_sq_col = state["exp_avg_sq_col"]
 
-                        grad_sq=grad.square()+eps2
-                        exp_avg_sq_row.mul_(beta2).add_(grad_sq.mean(dim=-1), alpha=d * d * (1-beta2))
-                        exp_avg_sq_col.mul_(beta2).add_(grad_sq.mean(dim=-2), alpha=d * d * (1-beta2))
+                        grad_sq=grad.square()
+                        exp_avg_sq_row.mul_(beta2).add_(grad_sq.mean(dim=-1), alpha=d * d * (1-beta2)).add_(eps2)
+                        exp_avg_sq_col.mul_(beta2).add_(grad_sq.mean(dim=-2), alpha=d * d * (1-beta2)).add_(eps2)
 
                     if safeguard_warmup:
                         s.mul_(beta3).add_(sliced_grad, alpha=((d / d0) * d))
