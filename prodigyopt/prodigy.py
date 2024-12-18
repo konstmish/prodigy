@@ -262,10 +262,9 @@ class Prodigy(torch.optim.Optimizer):
                 ### Take step
                 if beta1 > 0:
                     exp_avg = state['exp_avg']
-                    p.data.addcdiv_(exp_avg,denom, value=-dlr)
+                    p.data.addcdiv_(exp_avg, denom, value=-dlr)
                 else:
-                    p.data.addcdiv_(grad,denom, value=-dlr * d)
-
+                    p.data.addcdiv_(grad, denom, value=-dlr * d)
 
             group['k'] = k + 1
 
