@@ -196,8 +196,7 @@ class Prodigy(torch.optim.Optimizer):
 
                     # Exponential moving average of gradient values
                     if beta1 > 0:
-                        state['exp_avg'] = torch.zeros_like(p).detach()
-
+                        state['exp_avg'] = torch.zeros_like(p.data).detach()
                     # Exponential moving average of squared gradient values
                     if not factored or len(p.shape) < 2:
                         state['exp_avg_sq'] = torch.zeros_like(p).detach()
@@ -298,7 +297,6 @@ class Prodigy(torch.optim.Optimizer):
                 # Apply weight decay (decoupled variant)
                 if decay != 0 and decouple:
                     p.data.add_(p.data, alpha=-decay * dlr)
-
 
                 ### Take step
                 if update_clip is None:
