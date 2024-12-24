@@ -220,10 +220,10 @@ class Prodigy(torch.optim.Optimizer):
                 dist_tensor[0] = delta_numerator
                 dist_tensor[1] = d_denom
                 dist.all_reduce(dist_tensor, op=dist.ReduceOp.SUM)
-                global_d_numerator += dist_tensor[0]
+                global_d_numerator = d_numerator + dist_tensor[0]
                 global_d_denom = dist_tensor[1]
             else:
-                global_d_numerator += delta_numerator
+                global_d_numerator = d_numerator + delta_numerator
                 global_d_denom = d_denom
 
             d_hat = d_coef * global_d_numerator / global_d_denom
