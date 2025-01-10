@@ -1,10 +1,7 @@
-#
-# Reference implementation for the original research paper.
-# See "prodigy.py" for further development.
-#
+# Reference implementation for the original research paper (https://arxiv.org/abs/2306.06101)
+# For the latest version with additional features and improvements, see Prodigy in prodigyopt/prodigy.py
 
 import math
-from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import torch
 import torch.optim
@@ -12,13 +9,8 @@ import logging
 import os
 import torch.distributed as dist
 
-if TYPE_CHECKING:
-    from torch.optim.optimizer import _params_t
-else:
-    _params_t = Any
 
-
-class Prodigy(torch.optim.Optimizer):
+class ProdigyReference(torch.optim.Optimizer):
     r"""
     Implements Adam with Prodigy step-sizes.
     Leave LR set to 1 unless you encounter instability.
@@ -137,6 +129,7 @@ class Prodigy(torch.optim.Optimizer):
 
         d_numerator = group['d_numerator']
         d_numerator *= beta3
+        delta_numerator = 0.0
 
         for group in self.param_groups:
             decay = group['weight_decay']
@@ -187,7 +180,7 @@ class Prodigy(torch.optim.Optimizer):
 
                 if group_lr > 0.0:
                     # we use d / d0 instead of just d to avoid getting values that are too small
-                    d_numerator += (d / d0) * dlr * torch.dot(grad.flatten(), (p0.data - p.data).flatten()).item()
+                    delta_numerator += (d / d0) * dlr * torch.dot(grad.flatten(), (p0.data - p.data).flatten()).item()
 
                     # Adam EMA updates
                     exp_avg.mul_(beta1).add_(grad, alpha=d * (1-beta1))
@@ -211,13 +204,13 @@ class Prodigy(torch.optim.Optimizer):
         if lr > 0.0:
             if fsdp_in_use:
                 dist_tensor = torch.zeros(2).cuda()
-                dist_tensor[0] = d_numerator
+                dist_tensor[0] = delta_numerator
                 dist_tensor[1] = d_denom
                 dist.all_reduce(dist_tensor, op=dist.ReduceOp.SUM)
-                global_d_numerator = dist_tensor[0]
+                global_d_numerator = d_numerator + dist_tensor[0]
                 global_d_denom = dist_tensor[1]
             else:
-                global_d_numerator = d_numerator
+                global_d_numerator = d_numerator + delta_numerator
                 global_d_denom = d_denom
 
             d_hat = d_coef * global_d_numerator / global_d_denom
