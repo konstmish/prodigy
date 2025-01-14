@@ -211,7 +211,7 @@ class Prodigy(torch.optim.Optimizer):
 
         # if we have not done any progres, return
         # if we have any gradients available, will have d_denom > 0 (unless \|g\|=0)
-        if d_denom == 0:
+        if d_denom == 0 and not fsdp_in_use:
             return loss
        
         if lr > 0.0:
