@@ -8,7 +8,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setuptools.setup(
     name="prodigyopt",
-    version="1.1.1",
+    version="1.1.2",
     author="Konstantin Mishchenko",
     author_email="konsta.mish@gmail.com",
     description="An Adam-like optimizer for neural networks with adaptive estimation of learning rate",
